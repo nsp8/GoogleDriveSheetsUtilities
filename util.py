@@ -1,5 +1,6 @@
-from os import path
+# from os import path
 import logging
+import re
 import pandas as pd
 
 logger = logging.getLogger("util")
@@ -24,6 +25,20 @@ def df_to_list(data_df: pd.DataFrame):
     data = data_parts["data"]
     data.insert(0, cols_)
     return data
+
+
+def list_to_df(data_list):
+    """
+    Converts a list of data rows into a DataFrame.
+    :param data_list: list of values
+    :return: Pandas DataFrame of the values in `data_list`
+    """
+    def split_rows(row):
+        separator = "*#*"
+        return [re.sub(r"\n|\"+", "", r.replace(separator, ", ")) for r in
+                row.replace(", ", separator).split(",")]
+    _rows = [r for r in map(split_rows, data_list)]
+    return pd.DataFrame(_rows[1:], columns=_rows[0])
 
 
 def dict_to_df(sheet_data: dict):
@@ -63,23 +78,32 @@ def get_spreadsheets_from_files(id_list, mime_types, file_name="inputs"):
     return spreadsheets
 
 
-def format_csv_data(file_path=None):
-    if not file_path:
-        src_path = r"fallback_folder_path"
-        file_name = "fallback_file.csv"
-        file_path = path.join(src_path, file_name)
-    with open(file_path) as f:
-        contents = f.readlines()
+def extract_data_blocks(file_path):
+    """
+    Extracts the largest block of data in a CSV file that has many.
+    :param file_path: str - local path of the CSV file
+    :return: DataFrame of the largest block of data if the parsing went 
+    well, otherwise an empty DataFrame.
+    """
+    try:
+        with open(file_path) as f:
+            contents = f.readlines()
 
-    def get_first_row_pos():
-        content_map = [{"row": row, "len": len(row.split(","))} for row in
-                       contents]
-        meta_df = pd.DataFrame(content_map)
-        most_occurrences = meta_df["len"].mode().squeeze()
-        return meta_df[meta_df["len"] == most_occurrences].iloc[0].name
+        def get_first_row_pos():
+            content_map = [{"row": row, "len": len(row.split(","))} for row in
+                           contents]
+            meta_df = pd.DataFrame(content_map)
+            _mode = meta_df["len"].mode()
+            if _mode.shape[0] > 1:
+                _mode = _mode.max()
+            most_occurrences = _mode.squeeze()
+            return meta_df[meta_df["len"] == most_occurrences].iloc[0].name
 
-    data_df = pd.read_csv(file_path, skiprows=get_first_row_pos())
-    return data_df
+        data_df = pd.read_csv(file_path, skiprows=get_first_row_pos())
+        return data_df
+    except Exception as e:
+        logger.error(f"Couldn't format_csv_data because: {e}")
+        return pd.DataFrame()
 
 
 def clean_data_frame(data_frame: pd.DataFrame):
@@ -94,22 +118,32 @@ def clean_data_frame(data_frame: pd.DataFrame):
     return data_frame
 
 
-def correct_header(data_frame):
+def correct_headers(data_frame):
+    """
+    Rectifies the DataFrame's header if it has Unnamed columns
+    (shifted/translated frame values)
+    :param data_frame: Pandas DataFrame of values
+    :return: tuple - DataFrame, boolean: rectified DF, True if there were
+    unnamed values in the header otherwise the original DF, False.
+    """
+    data_frame = clean_data_frame(data_frame.copy(deep=True))
     _cols = data_frame.columns
-    _if_blanks = _cols.str.contains("Unnamed")
-    if _if_blanks.any():
+    _unnamed = _cols.str.contains("Unnamed")
+    # | _cols.str.contains(r"^$",regex=True)
+    if _unnamed.any():
         _next = data_frame.iloc[0]
         logger.info(f"next row: {_next.to_dict()}")
-        _replacer = _next[_if_blanks]
+        _replacer = _next[_unnamed]
         logger.info(f"replacement: {_replacer.to_dict()}")
         _start = _next.name
         logger.info(f"start index: {_start}")
-        _blanks = _cols[_if_blanks].to_list()
+        _blanks = _cols[_unnamed].to_list()
         logger.info(f"blanks: {_blanks}")
-        _not_blanks = _cols[~_if_blanks].to_list()
+        _not_blanks = _cols[~_unnamed].to_list()
         logger.info(f"not_blanks: {_not_blanks}")
-        _not_blanks.remove("count")
-        _combiner = _next[~_if_blanks]
+        if "count" in _not_blanks:
+            _not_blanks.remove("count")
+        _combiner = _next[~_unnamed]
         _head = {old: new for old, new in zip(_blanks, _replacer)}
         _updates = {old: f"{old}_{new}" for old, new in zip(_not_blanks,
                                                             _combiner)}
@@ -118,21 +152,31 @@ def correct_header(data_frame):
         df = data_frame.copy(deep=True)
         df.rename(columns=_head, inplace=True)
         df.drop([_start], inplace=True)
-        return df, True
+        if "count" in df.columns:
+            df.drop("count", axis=1, inplace=True)
+        return correct_headers(df)
     return data_frame, False
 
 
 def split_internal_frames(data_frame):
+    """
+    Splits the DataFrame into its internal constituents (if present).
+    :param data_frame: Pandas DataFrame
+    :return: dict - if internal blocks found - key: (start, end) tuple of
+    indices; value: block of DF, otherwise an empty dict.
+    """
     frames = dict()
     prev_df = data_frame.copy(deep=True)
     prev_df["count"] = prev_df.apply(pd.Series.count, axis=1)
-    df_breaks = prev_df[prev_df["count"] == 0] + prev_df[prev_df["count"] == 1]
+    df_breaks = prev_df[prev_df["count"].isin([0, 1])]
     for i in range(len(df_breaks.index)):
         _start = df_breaks.index[i] + 1
         try:
             _end = df_breaks.index[i + 1]
+            if _start > _end:
+                _end = None
         except IndexError:
-            _end = -1
+            _end = None
         _df = prev_df[_start:_end]
         if _df.shape[0] < 2:
             logger.info("Empty")
@@ -182,3 +226,77 @@ def get_file_data(file_object, file_type="csv"):
         logger.error(
             f"<get_file_data>: Caught Exception \t[File: {file_name}] {e}")
         return None
+
+
+def get_internal_frame_indices(contents: list):
+    """
+    Breaks the `contents` (list) on the basis of empty strings and returns the
+    indices of these breakpoints.
+    :param contents: list of textual data
+    :return: list of indices
+    """
+    from copy import deepcopy
+    data_rows = deepcopy(contents)
+    _splits = list()
+    _count = 0
+    for _index, _row in enumerate(data_rows):
+        i = _index + _count
+        v = _row.strip()
+        if not v and i not in _splits:
+            _splits.append(i)
+            data_rows.pop(_index)
+            _count += 1
+    return _splits
+
+
+def get_internal_frames(contents):
+    """
+    Returns a list of DataFrames of the different sections of tabular data
+    present in `contents`.
+    :param contents: list of textual data
+    :return: list of DataFrames
+    """
+    _indices = get_internal_frame_indices(contents)
+    df_list = list()
+    for i in range(len(_indices) - 1):
+        pos, nxt = _indices[i]+1, _indices[i+1]
+        _slice = contents[pos:nxt]
+        _df = list_to_df(_slice)
+        if _df.shape[0] > 10:
+            df_list.append(_df)
+    return df_list
+
+
+def get_row_metadata(rows):
+    """
+    Returns metadata about the CSV rows' multiply-delimited values.
+    Use this for debugging against the contents of the CSV.
+    :param rows: list of values
+    :return: dict of metadata
+    """
+    metadata = dict()
+    for i, row in enumerate(rows):
+        if isinstance(row, list):
+            row = ",".join(str(x) for x in row)
+        delimiter_matches = re.search(r"(\w+),\s+(\w+)\s+,(\w+)", row)
+        multiple_spaces = re.search(r"(\s+,\s+)", row)
+        spaces_before = re.search(r"(\s+,\s?)", row)
+        spaces_after = re.search(r"(\s?,\s+)", row)
+        metadata[i] = dict()
+        metadata[i]["row"] = row
+        metadata[i]["delimiter_matches"] = tuple()
+        metadata[i]["multiply_spaced_matches"] = tuple()
+        metadata[i]["spaces_before"] = tuple()
+        metadata[i]["spaces_after"] = tuple()
+        _replacer = re.subn(r"\s+,\s+", "*#*", row)
+        _values = _replacer[0].split(",")
+        metadata[i]["col_width"] = len(_values)
+        if delimiter_matches:
+            metadata[i]["delimiter_matches"] = delimiter_matches.groups()
+        if multiple_spaces:
+            metadata[i]["multiply_spaced_matches"] = multiple_spaces.groups()
+        if spaces_before:
+            metadata[i]["spaces_before"] = spaces_before.groups()
+        if spaces_after:
+            metadata[i]["spaces_after"] = spaces_after.groups()
+    return metadata
