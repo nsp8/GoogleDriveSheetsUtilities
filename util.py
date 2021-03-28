@@ -90,8 +90,9 @@ def extract_data_blocks(file_path):
             contents = f.readlines()
 
         def get_first_row_pos():
-            content_map = [{"row": row, "len": len(row.split(","))} for row in
-                           contents]
+            content_map = [{"row": row,
+                            "len": len(row.split(","))}
+                           for row in contents]
             meta_df = pd.DataFrame(content_map)
             _mode = meta_df["len"].mode()
             if _mode.shape[0] > 1:
@@ -300,3 +301,26 @@ def get_row_metadata(rows):
         if spaces_after:
             metadata[i]["spaces_after"] = spaces_after.groups()
     return metadata
+
+
+def remove_empty_strings(data_series):
+    """
+    Removes the Series of data values that do not contain empty strings.
+    :param data_series: Pandas Series
+    :return: Series with removed empty string data.
+    """
+    _series = data_series.apply(str.strip)
+    return _series[~_series.str.contains(r"^$", regex=True)]
+
+
+# noinspection PyTypeChecker
+def series_difference(subtrahend: pd.Series, minuend: pd.Series):
+    """
+    Returns the set difference of two Series objects.
+    :param subtrahend: Pandas Series - series of data being subtracted.
+    :param minuend: Pandas Series - series of data to subtract from the first.
+    :return: set - of the difference between two Series.
+    """
+    _minuend = set(minuend.apply(str.strip))
+    _subtrahend = set(subtrahend.apply(str.strip))
+    return _subtrahend - _minuend
