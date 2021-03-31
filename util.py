@@ -41,6 +41,30 @@ def list_to_df(data_list):
     return pd.DataFrame(_rows[1:], columns=_rows[0])
 
 
+def get_first_row_pos(contents: list):
+    """
+    Determines the starting position/index of data values.
+    :param contents: list - of string or list values.
+    :return: int - index position where the data values start from.
+    """
+    try:
+        content_map = [{"row": row,
+                        "len":
+                            len(row.split(",")) if isinstance(row, str) else
+                            len(row) if isinstance(row, list) else 0}
+                       for row in contents]
+        meta_df = pd.DataFrame(content_map)
+        _mode = meta_df["len"].mode()
+        if _mode.shape[0] > 1:
+            _mode = _mode.max()
+        most_occurrences = _mode.squeeze()
+        return meta_df[meta_df["len"] == most_occurrences].iloc[0].name
+    except Exception as e:
+        logger.info("Exception occurred in <get_first_row_pos>")
+        logger.error(e)
+        return 0
+
+
 def dict_to_df(sheet_data: dict):
     """
     Formats a dict of sheet values into a pandas DataFrame.
@@ -50,15 +74,21 @@ def dict_to_df(sheet_data: dict):
     :return: pandas.DataFrame - of the values, if everything goes right,
         otherwise an empty DataFrame.
     """
-    sheet_values = sheet_data.get("values", None)
-    if sheet_values:
-        logger.info(f"sheet_values = {sheet_values}")
-        sheet_header, sheet_data = sheet_values[0], sheet_values[1:]
-        sheet_df = pd.DataFrame(data=sheet_data,
-                                columns=sheet_header,
-                                index=None)
-        return sheet_df
-    return pd.DataFrame()
+    try:
+        sheet_values = sheet_data.get("values", None)
+        if sheet_values:
+            logger.info(f"sheet_values = {sheet_values}")
+            i = get_first_row_pos(sheet_values)
+            sheet_header, sheet_data = sheet_values[i], sheet_values[i+1:]
+            sheet_df = pd.DataFrame(data=sheet_data,
+                                    columns=sheet_header,
+                                    index=None)
+            logger.info(sheet_df)
+            return sheet_df
+    except Exception as e:
+        logger.info("Encountered an exception <dict_to_df>")
+        logger.error(e)
+        return pd.DataFrame()
 
 
 def get_spreadsheets_from_files(id_list, mime_types, file_name="inputs"):
@@ -89,18 +119,7 @@ def extract_data_blocks(file_path):
         with open(file_path) as f:
             contents = f.readlines()
 
-        def get_first_row_pos():
-            content_map = [{"row": row,
-                            "len": len(row.split(","))}
-                           for row in contents]
-            meta_df = pd.DataFrame(content_map)
-            _mode = meta_df["len"].mode()
-            if _mode.shape[0] > 1:
-                _mode = _mode.max()
-            most_occurrences = _mode.squeeze()
-            return meta_df[meta_df["len"] == most_occurrences].iloc[0].name
-
-        data_df = pd.read_csv(file_path, skiprows=get_first_row_pos())
+        data_df = pd.read_csv(file_path, skiprows=get_first_row_pos(contents))
         return data_df
     except Exception as e:
         logger.error(f"Couldn't format_csv_data because: {e}")

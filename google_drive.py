@@ -369,11 +369,13 @@ class GoogleDriveAPI(object):
                                       range=_range).execute()
                     if sheet_data:
                         formatted_data = util.dict_to_df(sheet_data)
+                        logger.info("Formatted DataFrame shape:")
                         logger.info(formatted_data.shape)
                         spreadsheet_dataframes[sheet_title] = formatted_data
-
+            else:
+                logger.info(f"Response couldn't be captured.")
         except errors.HttpError as error:
-            logger.error(f"ERROR in read_data: {error}")
+            logger.info(f"ERROR in read_data: {error}")
         finally:
             return spreadsheet_dataframes
 
