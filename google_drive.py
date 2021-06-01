@@ -76,9 +76,9 @@ class GoogleDriveAPI(object):
                 q=query, fields=_fields).execute()
             result = response.get("files", [])
         except errors.HttpError as error:
-            logger.error(f"<get_file_metadata_by_query>: {error}")
+            logger.error(f"ERROR in <get_file_metadata_by_query>: {error}")
         except Exception as e:
-            logger.error(f"<get_file_metadata_by_query>: {e}")
+            logger.error(f"ERROR in <get_file_metadata_by_query>: {e}")
         finally:
             return result
 
@@ -94,9 +94,9 @@ class GoogleDriveAPI(object):
             response = self.drive_service.files().get(
                 fileId=file_id, fields=_fields).execute()
         except errors.HttpError as error:
-            logger.error(f"<get_file_metadata_by_id>: {error}")
+            logger.error(f"ERROR in <get_file_metadata_by_id>: {error}")
         except Exception as e:
-            logger.error(f"<get_file_metadata_by_id>: {e}")
+            logger.error(f"ERROR in <get_file_metadata_by_id>: {e}")
         finally:
             return response
 
@@ -156,15 +156,18 @@ class GoogleDriveAPI(object):
                     return file_ids
                 return None
 
-    def get_folder(self, folder_name):
+    def get_folder(self, folder_name, is_name_subset=False):
         """
         Fetches a dict of a given folder's ID and the children contained inside
         (if present), even the ones in "Trash".
         :param folder_name: str - name of the folder as saved in the Drive.
+        :param is_name_subset: bool - True if name is a subset of the actual
+        name of the folder, False otherwise.
         :return: dict - of folder ID and any associated children.
         """
-        folder_condition = f"mimeType='{self.google_mime_types['folder']}'"
-        folder_query = f"name = '{folder_name}' and {folder_condition}"
+        condition = f"mimeType='{self.google_mime_types['folder']}'"
+        operator = "contains" if is_name_subset else "="
+        folder_query = f"name {operator} '{folder_name}' and {condition}"
         logger.info(folder_query)
         try:
             results = self.get_file_metadata_by_query(folder_query)
@@ -179,27 +182,35 @@ class GoogleDriveAPI(object):
                 logger.info("No Folder found!")
                 return {"self_id": None, "children": None}
         except errors.HttpError as error:
-            logger.error(f"ERROR in handle_inputs: {error}")
+            logger.error(f"ERROR in get_folder: {error}")
             return {"self_id": None, "children": None}
 
-    def check_file(self, parent_folder_id, file_name, file_type):
+    def is_file_in_folder(self, parent_folder_id, file_name, file_type,
+                          is_name_subset=False):
         """
         Checks if a file is present in a given folder.
         :param parent_folder_id: str - ID of the parent folder.
         :param file_name: str - name of the file.
         :param file_type: str - MIME type of file to be searched.
+        :param is_name_subset: bool - True if name is a subset of the actual
+        name of the folder, False otherwise.
         :return: tuple: bool (whether the file was found), str (logging
         message).
         """
         match = False
+        operator = "contains" if is_name_subset else "="
         mime_type = f"mimeType='{file_type}'"
         if file_type.strip().lower() == "google sheets":
             mime_type = f"mimeType='{self.google_mime_types['spreadsheet']}'"
         elif file_type.strip().lower() == "drive folder":
             mime_type = f"mimeType='{self.google_mime_types['folder']}'"
-        query = f"name = '{file_name}' and {mime_type}"
+        elif file_type.strip().lower() == "xls":
+            mime_type = f"mimeType='{self.excel_mime_types['xls']}'"
+        elif file_type.strip().lower() == "xlsx":
+            mime_type = f"mimeType='{self.excel_mime_types['xlsx']}'"
+        query = f"name {operator} '{file_name}' and {mime_type}"
         if parent_folder_id:
-            query = f"name = '{file_name}' and {mime_type} and " \
+            query = f"name {operator} '{file_name}' and {mime_type} and " \
                     f"'{parent_folder_id}' in parents"
         try:
             logger.info(f"\ncheck-file-query: {query}")
@@ -215,7 +226,7 @@ class GoogleDriveAPI(object):
                 msg = s.format(0, "files")
             return match, msg
         except errors.HttpError as error:
-            msg = f"ERROR in handle_inputs: {error}"
+            msg = f"ERROR in is_file_in_folder: {error}"
             return False, msg
 
     def move_file(self, file_id, target_id):
@@ -247,7 +258,10 @@ class GoogleDriveAPI(object):
         :return: Response if there was no Exceptions raised, otherwise None.
         """
         if not data_df.empty:
-            pre_exists, msg_ = self.check_file(folder_id, title, "spreadsheet")
+            pre_exists, msg_ = self.is_file_in_folder(
+                parent_folder_id=folder_id,
+                file_name=title,
+                file_type="spreadsheet")
             if pre_exists:
                 logger.info(msg_)
                 file_pattern_ = r"(.*)-v(\d+)"
@@ -315,7 +329,7 @@ class GoogleDriveAPI(object):
             if parent_folder_id:
                 logger.info(
                     f"\tSelf ID of Parent Folder: '{parent_folder_id}'")
-                folder_exists, msg = self.check_file(
+                folder_exists, msg = self.is_file_in_folder(
                     parent_folder_id=parent_folder_id,
                     file_name=folder_name,
                     file_type="folder")
@@ -375,7 +389,7 @@ class GoogleDriveAPI(object):
             else:
                 logger.info(f"Response couldn't be captured.")
         except errors.HttpError as error:
-            logger.info(f"ERROR in read_data: {error}")
+            logger.info(f"ERROR in sheet_to_df_dict: {error}")
         finally:
             return spreadsheet_dataframes
 
@@ -460,14 +474,14 @@ class GoogleDriveAPI(object):
         sheets += [self.google_mime_types.get("spreadsheet")]
         new_query = " or ".join([f"mimeType='{t}'" for t in sheets])
         _files = self.get_file_metadata_by_query(new_query)
-        _unique_file_names = list()
-        _unique_files = list()
+        unique_file_names = list()
+        unique_files = list()
         for _file in _files:
             _name = _file.get('name')
-            if _name not in _unique_file_names:
-                _unique_file_names.append(_name)
-                _unique_files.append(_file)
-        return _unique_files
+            if _name not in unique_file_names:
+                unique_file_names.append(_name)
+                unique_files.append(_file)
+        return unique_files
 
     def get_parent_folder(self, file_name: str):
         """
@@ -487,9 +501,22 @@ class GoogleDriveAPI(object):
                     _data.append(_meta)
                 parents.append(_data)
         except errors.HttpError as err:
-            logger.error(f"<get_parent_folder>: encountered: {err}")
+            logger.error(f"ERROR in <get_parent_folder>: encountered: {err}")
         finally:
             return parents
+
+    def get_file_type_from_mime(self, mime_type):
+        """
+        Get MIME type of the file from its metadata.
+        :param mime_type: string value of the MIME type
+        :return: returns the MIME type from the lookup dict associated with
+        the object, if it's valid, otherwise None.
+        """
+        all_mime_types = dict()
+        all_mime_types.update(self.excel_mime_types)
+        all_mime_types.update(self.google_mime_types)
+        reversed_map = {v: k for k, v in all_mime_types.items()}
+        return reversed_map.get(mime_type)
 
 
 def main():

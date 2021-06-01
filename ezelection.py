@@ -1,6 +1,36 @@
+import logging
 import re
 import pandas as pd
 import util
+
+logger = logging.getLogger("ezelection")
+logger.setLevel(logging.INFO)
+file_handler = logging.FileHandler("ezelection.log")
+logger.addHandler(file_handler)
+formatter = logging.Formatter("%(asctime)s: "
+                              "%(levelname)s: "
+                              "%(name)s: "
+                              "%(message)s")
+file_handler.setFormatter(formatter)
+
+VOTER_COLUMN_NAME = "Voter"
+PROXY_VOTER_COLUMN_NAME = "PROXY-VOTER"
+TOTAL_COLUMN_NAME = "TOTAL"
+PROXY_VALUES_COLUMN = "GIVE PROXY VOTING DISCRETION"
+
+
+def get_write_in_col(df):
+    """
+    Extracts the column name containing "Write-in" values.
+    :param df - DataFrame that has values under a "Write-in" column.
+    """
+    df_cols = df.columns
+    identifier = "[wW]rite"
+    target_columns = df_cols[df_cols.str.contains(identifier)]
+    if target_columns.shape[0] == 1:
+        col_name = target_columns.item()
+        return col_name
+    return None
 
 
 def clean_proxy_elections_block(data_frame):
@@ -9,6 +39,7 @@ def clean_proxy_elections_block(data_frame):
     :param data_frame: Pandas DataFrame of the first block of data.
     :return: Cleansed/rectified DataFrame.
     """
+
     def correct_votes_to_prefixes(*args):
         """
         Helper function to correct the prefixes of the pattern:
@@ -65,24 +96,29 @@ def clean_proxy_elections_block(data_frame):
         _match = col_values.str.lower().str.contains(_pattern, regex=True)
         _prefixed = col_values[_match]
         _values = _df[_df[col_name].isin(_prefixed)]
-        for x, row in zip(_values.index, _values.to_dict(orient='records')):
+        for i, row in zip(_values.index, _values.to_dict(orient="records")):
             _previous = row[col_name]
             _rectified = _handler(_previous, row[voter_column], _pattern)
-            _df.loc[x, col_name] = _rectified
+            _df.loc[i, col_name] = _rectified
         return _df
+    #
+    # def get_write_in_col(df):
+    #     """
+    #     Extracts the column name containing "Write-in" values.
+    #     :param df - DataFrame that has values under a "Write-in" column.
+    #     """
+    #     df_cols = df.columns
+    #     identifier = "[wW]rite"
+    #     target_columns = df_cols[df_cols.str.contains(identifier)]
+    #     if target_columns.shape[0] == 1:
+    #         col_name = target_columns.item()
+    #         return col_name
+    #     return None
 
-    non_unique_cols = list()
-    non_unique_values = list()
-    for col in data_frame.columns:
-        unique_rows = data_frame[col].nunique()
-        if unique_rows != data_frame.shape[0]:
-            non_unique_cols.append(col)
-            values = pd.Series(data_frame[col].unique())
-            unique_values = util.remove_empty_strings(values)
-            non_unique_values.append(unique_values)
     df_copy = data_frame.copy(deep=True)
-    write_in_col = non_unique_cols[-1]
-    write_in_values = non_unique_values[-1]
+    write_in_col = get_write_in_col(df_copy)
+    df_copy[write_in_col] = df_copy[write_in_col].apply(str.strip)
+    write_in_values = util.remove_empty_strings(df_copy[write_in_col])
     df_1 = clean_prefixes("self", df_copy, write_in_col, write_in_values)
     df_2 = clean_prefixes("n votes to", df_1, write_in_col, write_in_values)
     return df_2
@@ -119,39 +155,229 @@ def apply_aggregations_local(main_df):
         _scaled = first_col_values == list(range(first_val, _stop))
         return _scaled
 
-    # data_blocks = util.extract_data_blocks(file_path)
-    # internal_frames = util.split_internal_frames(data_blocks)
-    # frames = [util.correct_headers(f)[0]
-    #           for f in map(util.clean_data_frame, internal_frames.values())]
-    # main_df = frames[-1].copy(deep=True)
-    voter_column = "Voter"
-    proxy_voter_column = main_df[voter_column].str.extract(r"\((.*)\)")
+    voter_column = main_df[VOTER_COLUMN_NAME].str.extract(r"\((.*)\)")
     main_df_copy = main_df.copy(deep=True)
     first_column = main_df[main_df.columns[0]]
     if is_first_col_index(first_column):
         main_df_copy.drop([main_df.columns[0]], axis=1, inplace=True)
-    main_df_copy.set_index(voter_column, inplace=True)
+    main_df_copy.set_index(VOTER_COLUMN_NAME, inplace=True)
     just_numbers = main_df_copy.applymap(text_remover)
     # noinspection PyTypeChecker
     total_votes = just_numbers.apply(sum, axis=1)
-    """
-    reindex = main_df[main_df[voter_column].sort_values() == 
-    total_votes.sort_index().index].index
-    total_column = total_votes.reset_index().set_index(reindex)
-    """
-    main_df["PROXY-VOTER"] = proxy_voter_column
-    main_df["TOTAL"] = total_votes.to_list()
+    main_df[PROXY_VOTER_COLUMN_NAME] = voter_column
+    main_df[TOTAL_COLUMN_NAME] = total_votes.to_list()
     return main_df
+
+
+def get_frames(data_frame):
+    """
+    Splits the input DataFrame into constituent DataFrames.
+    :param data_frame: DataFrame to split into parts
+    :return: list of constituent DataFrames.
+    """
+    try:
+        internal_frames = util.split_internal_frames(data_frame)
+        frames = [util.correct_headers(f)[0]
+                  for f in map(util.clean_data_frame,
+                               internal_frames.values())]
+        return frames
+    except Exception as e:
+        logger.error(f"Encountered an error in get_frames: {e}")
+        return list()
 
 
 def get_data_local(file_path):
     """
-    Reads a local data file and tries to splits it into constituent DataFrames.
+    Reads a local data file and tries to returns the constituent DataFrames.
     :param file_path: str - path of the file to read.
     :return: list of DataFrames.
     """
-    data_blocks = util.extract_data_blocks(file_path)
-    internal_frames = util.split_internal_frames(data_blocks)
-    frames = [util.correct_headers(f)[0]
-              for f in map(util.clean_data_frame, internal_frames.values())]
-    return frames
+    return get_frames(util.extract_data_blocks(file_path))
+
+
+def get_data_from_drive(folder_name, file_name):
+    """
+    Returns DataFrames from a file from a folder in Google Drive
+    :param folder_name: name or subset of name of the parent folder
+    :param file_name: name or subset of name of the file to fetch
+    :return: list of DataFrames.
+    """
+    try:
+        import google_drive as drive
+        drive_api = drive.GoogleDriveAPI()
+        proxy_vote_result_folders = drive_api.get_folder(folder_name, True)
+        if proxy_vote_result_folders:
+            if "children" in proxy_vote_result_folders:
+                folder_contents = proxy_vote_result_folders.get("children")
+                file = None
+                if file_name:
+                    for _object in folder_contents:
+                        if _object:
+                            if file_name in _object.get("name"):
+                                file = _object
+                                break
+                    if file:
+                        file_type = drive_api.get_file_type_from_mime(
+                            file.get("mimeType"))
+                        file_data = util.get_file_data(file, file_type)
+                        file_df = file_data[list(file_data.keys())[0]]
+                        return get_frames(file_df)
+                    logger.error(f"Could not find file '{file_name}' "
+                                 f"in folder '{folder_name}'")
+    except Exception as e:
+        logger.error(f"Encountered an error in get_data_from_drive: {e}")
+    return None
+
+
+def equalize_columns(*data_frames):
+    """
+    Equalize the column datatype of the the DataFrames to str.
+    :param data_frames: DataFrames passed as arguments
+    :return: list of DataFrames
+    """
+    df_list = list()
+    for data_frame in data_frames:
+        df = data_frame.copy(deep=True)
+        for col in df.columns:
+            df[col] = df[col].astype("str")
+        df_list.append(df)
+    return df_list
+
+
+def apply_final_aggregations(first_df, second_df, col_list):
+    """
+    Applies aggregations to create the last DataFrame.
+    :param first_df: the proxy voters DataFrame
+    :param second_df: the vote-distribution DataFrame
+    :param col_list: list - of predetermined common columns that will be a
+    part of the last DataFrame.
+    :return: the final DataFrame.
+    """
+    def get_row_total(x, y):
+        """
+        Folding/reducing function to sum values in a row (skipping strings).
+        """
+        try:
+            if isinstance(x, str):
+                if isinstance(y, str):
+                    return 0
+                return y
+            elif isinstance(y, str):
+                return x
+            return x + y
+        except Exception as err:
+            logger.error(f"Encountered an error in get_row_total: {err}")
+
+    from functools import reduce
+    try:
+        write_in_col = get_write_in_col(first_df)
+        write_in_values = util.remove_empty_strings(first_df[write_in_col])
+        write_in_condition = first_df[write_in_col].isin(write_in_values)
+        org_head_votes = first_df[~write_in_condition]
+        _head = r"Option\s*:\s*(\w+\s+\w+)"
+        first_df_cols = first_df.columns
+        _col = first_df.columns[first_df_cols.str.contains(_head)][0]
+        org_head_match = first_df_cols.str.extract(_head).dropna()
+        proxy_holders = list()
+        if org_head_match.shape[0] == 1:
+            if "squeeze" in dir(org_head_match):
+                org_head = org_head_match.squeeze()
+                proxy_holders.append(org_head)
+        write_in_list = write_in_values.unique().tolist()
+        write_in_list.sort()
+        proxy_holders.extend(write_in_list)
+        final_df_cols = ["PROXY HOLDER"]
+        final_df_cols.extend(col_list)
+        final_df_cols.append("Total")
+        vote_dist_df = second_df.applymap(util.convert_to_numeric)
+        final_data = list()
+        for i, p in enumerate(proxy_holders):
+            data = {final_df_cols[0]: p}
+            if i == 0:
+                lookup_df_2 = vote_dist_df[VOTER_COLUMN_NAME].isin(
+                    org_head_votes[VOTER_COLUMN_NAME])
+            else:
+                lookup_df_1 = first_df[write_in_col].str.contains(p,
+                                                                  regex=False)
+                lookup_df_2 = vote_dist_df[VOTER_COLUMN_NAME].isin(
+                    first_df[lookup_df_1][VOTER_COLUMN_NAME])
+            # Applying sum across a column: reducing string values to 0
+            col_values = vote_dist_df[lookup_df_2][col_list].apply(
+                lambda s: reduce(get_row_total, s.to_list())).to_dict()
+            total = reduce(get_row_total, col_values.values())
+            data.update(col_values)
+            data.update({"Total": total})
+            final_data.append(data)
+        return pd.DataFrame(final_data)
+    except Exception as e:
+        logger.error(f"Encountered an error in apply_final_aggregations: {e}")
+        return pd.DataFrame()
+
+
+def test_sample(local_file_map: dict, drive_file_map: dict):
+    """
+    Tests sample file data.
+    :param local_file_map: dict of folder and file names/paths of local file.
+    :param drive_file_map: dict of folder and file names/paths of Google Drive
+    file.
+    :return: a tuple of:
+        Comparison DF - differences between the local and Drive files,
+        Local file data-frame and Google Drive file data-frame.
+    """
+    required_keys = {"folder", "file"}
+    try:
+        _keys = set(local_file_map.keys()).intersection(
+            set(drive_file_map.keys()))
+        assert required_keys.issubset(_keys)
+        from os import path
+        from pandas import DataFrame, Series
+        local_folder = local_file_map.get("folder")
+        local_file = local_file_map.get("file")
+        file_path = path.join(local_folder, local_file)
+        if path.exists(file_path):
+            local_data = get_data_local(file_path)
+            local_frame_index = 1 if len(local_data) > 0 else 0
+            if local_frame_index == 0:
+                raise Exception("Could only find one frame in local file.")
+            vote_distribution_df = local_data[local_frame_index]
+            applied_agg_df = apply_aggregations_local(vote_distribution_df)
+            agg_sorted_df = applied_agg_df.sort_values(
+                [TOTAL_COLUMN_NAME, PROXY_VOTER_COLUMN_NAME],
+                ignore_index=True)
+            drive_folder = drive_file_map.get("folder")
+            drive_file = drive_file_map.get("file")
+            drive_file_data = get_data_from_drive(drive_folder, drive_file)
+            common_cols = drive_file_data[-1].columns.intersection(
+                vote_distribution_df.columns)
+            clean_proxy_df = clean_proxy_elections_block(local_data[0])
+            final_df = apply_final_aggregations(clean_proxy_df,
+                                                vote_distribution_df,
+                                                common_cols)
+            drive_frame_index = 1 if len(drive_file_data) > 0 else 0
+            drive_file_df = drive_file_data[drive_frame_index]
+            last_row = drive_file_df.index[-1]
+            last_value = drive_file_df.loc[last_row][VOTER_COLUMN_NAME]
+            drive_agg_df = drive_file_df.copy(deep=True)
+            if last_value.lower() in ["total"]:
+                drive_agg_df = drive_agg_df.drop(index=last_row)
+            drive_df_sorted = drive_agg_df.sort_values(
+                [TOTAL_COLUMN_NAME, PROXY_VOTER_COLUMN_NAME],
+                ignore_index=True).reset_index()
+            is_subset = agg_sorted_df[PROXY_VOTER_COLUMN_NAME].isin(
+                    drive_agg_df[PROXY_VOTER_COLUMN_NAME])
+            local_df = agg_sorted_df[is_subset]
+            local_df = local_df[drive_agg_df.columns]
+            reqd_index = list(drive_df_sorted.columns).index(VOTER_COLUMN_NAME)
+            reqd_cols = drive_df_sorted.columns[reqd_index:]
+            local_df, drive_df_sorted = equalize_columns(local_df,
+                                                         drive_df_sorted)
+            eq_condition = local_df[reqd_cols].eq(drive_df_sorted[reqd_cols])
+            comparison_df = local_df[~eq_condition][reqd_cols]
+            comparison_df.dropna(axis=1, how="all", inplace=True)
+            comparison_df.dropna(axis=0, how="all", inplace=True)
+            return comparison_df, final_df
+    except AssertionError as ae:
+        logger.error(f"A required key wasn't in the dict: {ae}")
+    except Exception as e:
+        logger.error(f"Encountered an error in test_sample: {e}")
+    return tuple()

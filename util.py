@@ -122,7 +122,7 @@ def extract_data_blocks(file_path):
         data_df = pd.read_csv(file_path, skiprows=get_first_row_pos(contents))
         return data_df
     except Exception as e:
-        logger.error(f"Couldn't format_csv_data because: {e}")
+        logger.error(f"Couldn't format CSV data because: {e}")
         return pd.DataFrame()
 
 
@@ -217,26 +217,35 @@ def get_file_data(file_object, file_type="csv"):
     :return: pandas DataFrame (for csv) or dict (excel); None in case of
     errors or if not data was retrieved.
     """
-    import requests
+    assert file_type is not None
+    _type = file_type.strip().lower()
+    # _type = file_object.get("mimeType")
+    # _type = _type.strip().lower()
+    assert _type in ["csv", "excel", "xls", "xlsx"]
+
+    from requests import get
     from io import StringIO
+    from pandas import read_csv, read_excel
+
     try:
         file_id = file_object["id"]
         _url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        _response = requests.get(_url)
+        _response = get(_url)
         if _response:
-            if file_type.strip().lower() == "csv":
+            if _type == "csv":
                 _content = _response.text
                 _raw = StringIO(_content)
-                return pd.read_csv(_raw)
-            elif file_type.strip().lower() in ["excel", "xls", "xlsx"]:
+                return read_csv(_raw)
+            elif _type in ["excel", "xls", "xlsx"]:
                 _content = _response.content
-                return pd.read_excel(_content, sheet_name=None)
+                return read_excel(_content, sheet_name=None)
         else:
             logger.info(f"Response was not found for: {_url}")
             return None
     except AssertionError as assertion:
         logger.error(f"<get_file_data>: {assertion}\n"
                      f"file_type should either be 'csv' or 'excel'.")
+        return None
     except KeyError as err:
         logger.error(
             f"<get_file_data>: {err} not found in {file_object.keys()}")
@@ -328,8 +337,8 @@ def remove_empty_strings(data_series):
     :param data_series: Pandas Series
     :return: Series with removed empty string data.
     """
-    _series = data_series.apply(str.strip)
-    return _series[~_series.str.contains(r"^$", regex=True)]
+    # _series = data_series.apply(str.strip)
+    return data_series[~data_series.str.contains(r"^$", regex=True)]
 
 
 # noinspection PyTypeChecker
@@ -343,3 +352,27 @@ def series_difference(subtrahend: pd.Series, minuend: pd.Series):
     _minuend = set(minuend.apply(str.strip))
     _subtrahend = set(subtrahend.apply(str.strip))
     return _subtrahend - _minuend
+
+
+def convert_to_numeric(value):
+    """
+    Converts a cell-value of a DataFrame to its numeric value if it is valid.
+    :param value: cell-value, presumably a string
+    :return: numeric equivalent of `value` otherwise the value itself.
+    """
+    try:
+        if isinstance(value, str):
+            if re.search(r"(under|over)vote[d]", value.lower()):
+                return 0
+            if value.strip() == '':
+                return 0
+            if value.isdigit():
+                return int(value)
+            else:
+                n = float(value)
+                return n
+    except ValueError as v:
+        logger.error(f"Encountered ValueError in convert_to_numeric: {v}")
+    except Exception as e:
+        logger.error(f"Encountered an exception in convert_to_numeric: {e}")
+    return value
