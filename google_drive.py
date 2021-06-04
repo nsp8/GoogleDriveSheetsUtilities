@@ -2,11 +2,11 @@ from os import path
 from re import search
 from string import ascii_uppercase as alphabets
 import logging
-import pickle
 from apiclient import errors
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 import util
 
 logger = logging.getLogger("google_drive_api")
@@ -42,9 +42,8 @@ class GoogleDriveAPI(object):
         # Instantiate Google Drive and Spreadsheets service objects.
         # [Reads the tokens and credentials files for authentication.]
         creds = None
-        if path.exists('token.pickle'):
-            with open('token.pickle', 'rb') as token:
-                creds = pickle.load(token)
+        if path.exists("token.json"):
+            creds = Credentials.from_authorized_user_file("token.json")
 
         # If there are no (valid) credentials available, let the user log in.
         if not creds or not creds.valid:
@@ -56,8 +55,8 @@ class GoogleDriveAPI(object):
                                                                  self.scopes)
                 creds = flow.run_local_server(port=0)
             # Save the credentials for the next run
-            with open('token.pickle', 'wb') as token:
-                pickle.dump(creds, token)
+            with open("token.json", "w") as token:
+                token.write(creds.to_json())
         self.drive_service = build('drive', 'v3', credentials=creds,
                                    cache_discovery=False)
         self.sheets_service = build('sheets', 'v4', credentials=creds,

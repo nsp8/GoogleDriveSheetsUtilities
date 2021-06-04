@@ -1,3 +1,4 @@
+from os import path
 import logging
 import re
 import pandas as pd
@@ -30,6 +31,9 @@ def get_write_in_col(df):
     if target_columns.shape[0] == 1:
         col_name = target_columns.item()
         return col_name
+    # TODO: code for the case with multiple write-in columns:
+    # elif target_columns.shape[0] > 1:
+    #     return target_columns.to_list()
     return None
 
 
@@ -101,19 +105,6 @@ def clean_proxy_elections_block(data_frame):
             _rectified = _handler(_previous, row[voter_column], _pattern)
             _df.loc[i, col_name] = _rectified
         return _df
-    #
-    # def get_write_in_col(df):
-    #     """
-    #     Extracts the column name containing "Write-in" values.
-    #     :param df - DataFrame that has values under a "Write-in" column.
-    #     """
-    #     df_cols = df.columns
-    #     identifier = "[wW]rite"
-    #     target_columns = df_cols[df_cols.str.contains(identifier)]
-    #     if target_columns.shape[0] == 1:
-    #         col_name = target_columns.item()
-    #         return col_name
-    #     return None
 
     df_copy = data_frame.copy(deep=True)
     write_in_col = get_write_in_col(df_copy)
@@ -121,7 +112,8 @@ def clean_proxy_elections_block(data_frame):
     write_in_values = util.remove_empty_strings(df_copy[write_in_col])
     df_1 = clean_prefixes("self", df_copy, write_in_col, write_in_values)
     df_2 = clean_prefixes("n votes to", df_1, write_in_col, write_in_values)
-    return df_2
+    df_3 = df_2.applymap(lambda s: re.subn(r'\"*', '', s.strip())[0])
+    return df_3
 
 
 def apply_aggregations_local(main_df):
@@ -192,7 +184,8 @@ def get_data_local(file_path):
     :param file_path: str - path of the file to read.
     :return: list of DataFrames.
     """
-    return get_frames(util.extract_data_blocks(file_path))
+    # return get_frames(util.extract_data_blocks(file_path))
+    return util.extract_data_blocks(file_path)
 
 
 def get_data_from_drive(folder_name, file_name):
@@ -244,13 +237,42 @@ def equalize_columns(*data_frames):
     return df_list
 
 
-def apply_final_aggregations(first_df, second_df, col_list):
+def get_org_heads(data_frame, pattern):
+    """
+    Parses the DataFrame to get the list of organization heads.
+    :param data_frame: DataFrame to parse.
+    :param pattern: regex pattern to use to search.
+    :return: modified DataFrame with cleansed column head and
+    list of org-heads found.
+    """
+    processed_cols = list()
+    df = data_frame.copy(deep=True)
+    df_cols = df.columns
+    column_list = df_cols[df_cols.str.contains(util.REPLACEMENT,
+                                               regex=False)].to_list()
+    for col in column_list:
+        _spl = col.split(util.REPLACEMENT)
+        if processed_cols:
+            last_added = processed_cols[-1]
+            if last_added in _spl:
+                logger.info("Value already added.")
+            else:
+                processed_cols.append(_spl[-1])
+        else:
+            _match = re.search(pattern, _spl[0])
+            if _match:
+                _group = _match.groups()[0]
+                processed_cols.append(_group)
+        new_col = {col: re.subn(util.REPLACEMENT, ",", col)[0]}
+        df.rename(columns=new_col, inplace=True)
+    return df, processed_cols
+
+
+def apply_final_aggregations(first_df, second_df):
     """
     Applies aggregations to create the last DataFrame.
     :param first_df: the proxy voters DataFrame
     :param second_df: the vote-distribution DataFrame
-    :param col_list: list - of predetermined common columns that will be a
-    part of the last DataFrame.
     :return: the final DataFrame.
     """
     def get_row_total(x, y):
@@ -270,26 +292,26 @@ def apply_final_aggregations(first_df, second_df, col_list):
 
     from functools import reduce
     try:
-        write_in_col = get_write_in_col(first_df)
-        write_in_values = util.remove_empty_strings(first_df[write_in_col])
-        write_in_condition = first_df[write_in_col].isin(write_in_values)
-        org_head_votes = first_df[~write_in_condition]
-        _head = r"Option\s*:\s*(\w+\s+\w+)"
-        first_df_cols = first_df.columns
-        _col = first_df.columns[first_df_cols.str.contains(_head)][0]
-        org_head_match = first_df_cols.str.extract(_head).dropna()
+        df1 = first_df.copy(deep=True)
+        write_in_col = get_write_in_col(df1)
+        write_in_values = util.remove_empty_strings(df1[write_in_col])
+        write_in_condition = df1[write_in_col].isin(write_in_values)
+        org_head_votes = df1[~write_in_condition]
+        head_pattern = r"Option\s*:\s*(\w+(\W+\w+)+)"
+        df1, org_heads = get_org_heads(df1, head_pattern)
         proxy_holders = list()
-        if org_head_match.shape[0] == 1:
-            if "squeeze" in dir(org_head_match):
-                org_head = org_head_match.squeeze()
-                proxy_holders.append(org_head)
+        proxy_holders.extend(org_heads)
         write_in_list = write_in_values.unique().tolist()
         write_in_list.sort()
         proxy_holders.extend(write_in_list)
         final_df_cols = ["PROXY HOLDER"]
+        col_index = list(second_df.columns).index(PROXY_VALUES_COLUMN)
+        col_list = second_df.columns[col_index:]
         final_df_cols.extend(col_list)
         final_df_cols.append("Total")
-        vote_dist_df = second_df.applymap(util.convert_to_numeric)
+        df2 = second_df.copy(deep=True)
+        df2 = df2.applymap(lambda s: re.subn(r'\"*', '', s.strip())[0])
+        vote_dist_df = df2.applymap(util.convert_to_numeric)
         final_data = list()
         for i, p in enumerate(proxy_holders):
             data = {final_df_cols[0]: p}
@@ -297,10 +319,9 @@ def apply_final_aggregations(first_df, second_df, col_list):
                 lookup_df_2 = vote_dist_df[VOTER_COLUMN_NAME].isin(
                     org_head_votes[VOTER_COLUMN_NAME])
             else:
-                lookup_df_1 = first_df[write_in_col].str.contains(p,
-                                                                  regex=False)
+                lookup_df_1 = df1[write_in_col].str.contains(p, regex=False)
                 lookup_df_2 = vote_dist_df[VOTER_COLUMN_NAME].isin(
-                    first_df[lookup_df_1][VOTER_COLUMN_NAME])
+                    df1[lookup_df_1][VOTER_COLUMN_NAME])
             # Applying sum across a column: reducing string values to 0
             col_values = vote_dist_df[lookup_df_2][col_list].apply(
                 lambda s: reduce(get_row_total, s.to_list())).to_dict()
@@ -314,7 +335,29 @@ def apply_final_aggregations(first_df, second_df, col_list):
         return pd.DataFrame()
 
 
-def test_sample(local_file_map: dict, drive_file_map: dict):
+def test_file(local_file_path):
+    """
+    Tests new files and creates the third DataFrame for the data.
+    :param local_file_path: str - file path.
+    :return: DataFrame containing the processed data.
+    """
+    try:
+        if path.exists(local_file_path):
+            local_data = get_data_local(local_file_path)
+            local_frame_index = 1 if len(local_data) > 0 else 0
+            if local_frame_index == 0:
+                raise Exception("Could only find one frame in local file.")
+            vote_distribution_df = local_data[local_frame_index]
+            clean_proxy_df = clean_proxy_elections_block(local_data[0])
+            final_df = apply_final_aggregations(clean_proxy_df,
+                                                vote_distribution_df)
+            return final_df
+    except Exception as e:
+        logger.error(f"Error in test_file: {e}")
+    return pd.DataFrame()
+
+
+def test_drive_sample(local_file_map: dict, drive_file_map: dict):
     """
     Tests sample file data.
     :param local_file_map: dict of folder and file names/paths of local file.
@@ -329,8 +372,6 @@ def test_sample(local_file_map: dict, drive_file_map: dict):
         _keys = set(local_file_map.keys()).intersection(
             set(drive_file_map.keys()))
         assert required_keys.issubset(_keys)
-        from os import path
-        from pandas import DataFrame, Series
         local_folder = local_file_map.get("folder")
         local_file = local_file_map.get("file")
         file_path = path.join(local_folder, local_file)
@@ -347,12 +388,9 @@ def test_sample(local_file_map: dict, drive_file_map: dict):
             drive_folder = drive_file_map.get("folder")
             drive_file = drive_file_map.get("file")
             drive_file_data = get_data_from_drive(drive_folder, drive_file)
-            common_cols = drive_file_data[-1].columns.intersection(
-                vote_distribution_df.columns)
             clean_proxy_df = clean_proxy_elections_block(local_data[0])
             final_df = apply_final_aggregations(clean_proxy_df,
-                                                vote_distribution_df,
-                                                common_cols)
+                                                vote_distribution_df)
             drive_frame_index = 1 if len(drive_file_data) > 0 else 0
             drive_file_df = drive_file_data[drive_frame_index]
             last_row = drive_file_df.index[-1]

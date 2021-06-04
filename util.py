@@ -1,4 +1,5 @@
 # from os import path
+from copy import deepcopy
 import logging
 import re
 import pandas as pd
@@ -12,6 +13,9 @@ formatter = logging.Formatter("%(asctime)s: "
                               "%(name)s: "
                               "%(message)s")
 file_handler.setFormatter(formatter)
+
+
+REPLACEMENT = "#*#"
 
 
 def df_to_list(data_df: pd.DataFrame):
@@ -65,6 +69,35 @@ def get_first_row_pos(contents: list):
         return 0
 
 
+def get_frame_indices(meta_frame):
+    """
+    Calculates the beginning and ending indices of data blocks.
+    :param meta_frame: DataFrame containing metadata on the rows
+    (rows with type of spacing around commas in strings and split-length)
+    :return: list of dictionaries of start and end indices.
+    """
+    indices = list()
+    len_series = meta_frame["len"]
+    blank_df = meta_frame[len_series == len_series.min()]
+    data_blocks = meta_frame[len_series > len_series.min()]
+    for blank_row in blank_df.index:
+        _data = dict()
+        current_row_len = meta_frame.loc[blank_row]["len"]
+        _next = blank_row + 1
+        if _next in meta_frame.index:
+            next_row = meta_frame.loc[_next]
+            next_row_len = next_row["len"]
+            if next_row_len > current_row_len:
+                if len(indices):
+                    data_index = data_blocks.index
+                    i = data_index.to_list().index(_next)
+                    indices[-1].setdefault("end", data_index[i-1])
+                _data["start"] = _next
+                indices.append(_data)
+    indices[-1].setdefault("end", data_blocks.index[-1])
+    return indices
+
+
 def dict_to_df(sheet_data: dict):
     """
     Formats a dict of sheet values into a pandas DataFrame.
@@ -108,22 +141,79 @@ def get_spreadsheets_from_files(id_list, mime_types, file_name="inputs"):
     return spreadsheets
 
 
+def perform_split(contents):
+    """
+    Perform string split on comma separated values without breaking commas in
+    string values.
+    :param contents: list of file rows
+    :return: list of cleaner file rows with appropriate parsing
+    """
+    from numpy import nan
+    _contents = deepcopy(contents)
+    row_metadata = get_row_metadata(_contents)
+    meta_df = pd.DataFrame(row_metadata).T
+    meta_df_reduced = meta_df.applymap(lambda s: nan if not s else s).dropna(
+        axis=1, how="all")
+    valid_df = meta_df[meta_df["col_width"] > 1]
+    value_counts = valid_df["col_width"].value_counts().reset_index()
+    counts = value_counts["col_width"]
+    outlier = value_counts[counts == counts.min()]["index"].squeeze()
+    dirty_row = meta_df_reduced[meta_df_reduced["col_width"] == outlier]
+    dirty_row = dirty_row.dropna(axis=1, how="all")
+    column = list(set(dirty_row.columns) - {"row", "col_width"})[0]
+    _pattern = dirty_row[column].squeeze()[0]
+    dirty_row["row"] = dirty_row["row"].apply(
+        lambda s: re.subn(_pattern, REPLACEMENT, s)[0])
+    for i in dirty_row.index:
+        _contents[i] = dirty_row["row"].loc[i]
+    return _contents
+
+
 def extract_data_blocks(file_path):
     """
     Extracts the largest block of data in a CSV file that has many.
     :param file_path: str - local path of the CSV file
-    :return: DataFrame of the largest block of data if the parsing went 
+    :return: DataFrames of each block of data if the parsing went
     well, otherwise an empty DataFrame.
     """
+
+    def create_content_map(_contents):
+        """
+        Parses the contents of the file (as rows) and creates a "meta" schema.
+        :param _contents: list of rows.
+        :return: list of dictionaries of metadata on the rows.
+        """
+        _content_map = list()
+        for row in _contents:
+            _map = dict()
+            _row = re.subn(r"^(\W|_)+|^(ï»¿\w)+", "", row)[0]
+            _len = 0
+            if isinstance(_row, str):
+                _len = len(_row.split(","))
+            elif isinstance(_row, list):
+                _len = len(_row)
+            _map["row"] = _row
+            _map["len"] = _len
+            _content_map.append(_map)
+        return _content_map
+
+    dataframes = list()
     try:
         with open(file_path) as f:
             contents = f.readlines()
 
-        data_df = pd.read_csv(file_path, skiprows=get_first_row_pos(contents))
-        return data_df
+        new_content = perform_split(contents)
+        content_map = pd.DataFrame(create_content_map(new_content))
+        frame_indices = get_frame_indices(content_map)
+        for frame in frame_indices:
+            start, end = frame["start"], frame["end"]
+            rows_str = new_content[start:end + 1]
+            rows_list = [re.subn(r"\n", "", r)[0].split(",") for r in rows_str]
+            dataframes.append(
+                pd.DataFrame(data=rows_list[1:], columns=rows_list[0]))
     except Exception as e:
         logger.error(f"Couldn't format CSV data because: {e}")
-        return pd.DataFrame()
+    return dataframes
 
 
 def clean_data_frame(data_frame: pd.DataFrame):
@@ -219,8 +309,6 @@ def get_file_data(file_object, file_type="csv"):
     """
     assert file_type is not None
     _type = file_type.strip().lower()
-    # _type = file_object.get("mimeType")
-    # _type = _type.strip().lower()
     assert _type in ["csv", "excel", "xls", "xlsx"]
 
     from requests import get
@@ -264,7 +352,6 @@ def get_internal_frame_indices(contents: list):
     :param contents: list of textual data
     :return: list of indices
     """
-    from copy import deepcopy
     data_rows = deepcopy(contents)
     _splits = list()
     _count = 0
@@ -304,30 +391,30 @@ def get_row_metadata(rows):
     :return: dict of metadata
     """
     metadata = dict()
-    for i, row in enumerate(rows):
-        if isinstance(row, list):
-            row = ",".join(str(x) for x in row)
-        delimiter_matches = re.search(r"(\w+),\s+(\w+)\s+,(\w+)", row)
-        multiple_spaces = re.search(r"(\s+,\s+)", row)
-        spaces_before = re.search(r"(\s+,\s?)", row)
-        spaces_after = re.search(r"(\s?,\s+)", row)
-        metadata[i] = dict()
-        metadata[i]["row"] = row
-        metadata[i]["delimiter_matches"] = tuple()
-        metadata[i]["multiply_spaced_matches"] = tuple()
-        metadata[i]["spaces_before"] = tuple()
-        metadata[i]["spaces_after"] = tuple()
-        _replacer = re.subn(r"\s+,\s+", "*#*", row)
-        _values = _replacer[0].split(",")
-        metadata[i]["col_width"] = len(_values)
-        if delimiter_matches:
-            metadata[i]["delimiter_matches"] = delimiter_matches.groups()
-        if multiple_spaces:
-            metadata[i]["multiply_spaced_matches"] = multiple_spaces.groups()
-        if spaces_before:
-            metadata[i]["spaces_before"] = spaces_before.groups()
-        if spaces_after:
-            metadata[i]["spaces_after"] = spaces_after.groups()
+    space_pattern_map = {
+        "delimiter": r"(\w+),\s+(\w+)\s+,(\w+)",
+        "multiple": r"(\s+,\s+)",
+        "before": r"(\s+,\s?)",
+        "after": r"(\s?,\s+)"
+    }
+    try:
+        for i, row in enumerate(rows):
+            if isinstance(row, list):
+                row = ",".join(str(x) for x in row)
+            metadata[i] = dict()
+            metadata[i]["row"] = row
+            _replacer = re.subn(r"\s+,\s+", "*#*", row)
+            _values = _replacer[0].split(",")
+            for _type, _pattern in space_pattern_map.items():
+                _match = re.search(_pattern, row)
+                if _match:
+                    _groups = _match.groups()
+                    metadata[i][_type] = _groups
+                else:
+                    metadata[i][_type] = tuple()
+            metadata[i]["col_width"] = len(_values)
+    except Exception as e:
+        logger.info(f"Exception in get_row_metadata: {e}")
     return metadata
 
 
