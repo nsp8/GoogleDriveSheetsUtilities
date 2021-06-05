@@ -68,7 +68,7 @@ class GoogleDriveAPI(object):
         :param query: str - query string to query the Drive API.
         :return: list of responses.
         """
-        result = dict()
+        result = list()
         try:
             _fields = f"files({', '.join(self.file_fields)})"
             response = self.drive_service.files().list(
@@ -257,6 +257,8 @@ class GoogleDriveAPI(object):
         :return: Response if there was no Exceptions raised, otherwise None.
         """
         if not data_df.empty:
+            from itertools import product
+            from string import ascii_uppercase
             pre_exists, msg_ = self.is_file_in_folder(
                 parent_folder_id=folder_id,
                 file_name=title,
@@ -273,6 +275,14 @@ class GoogleDriveAPI(object):
                 "properties": {"title": title}
             }
             try:
+                sheet_columns = list(ascii_uppercase)
+                data_columns = data_df.columns
+                if len(data_columns) > 26:
+                    more_columns = ["".join(c) for c in product(
+                        ascii_uppercase, repeat=2)]
+                    sheet_columns.extend(more_columns)
+                start_column = sheet_columns[0]
+                end_column = sheet_columns[len(data_columns) - 1]
                 new_sheet = self.sheets_service.spreadsheets().create(
                     body=spreadsheet, fields='spreadsheetId').execute()
                 new_sheet_id = new_sheet.get('spreadsheetId')
@@ -280,9 +290,13 @@ class GoogleDriveAPI(object):
                     logger.info(f"New Spreadsheet-ID: {new_sheet_id}")
                     move_response = self.move_file(new_sheet_id, folder_id)
                     logger.info(f"Response for move object: {move_response}")
+                    logger.info(f"Saving data")
+                    sheet_name = "Sheet1"
+                    logger.info(f"(Sheet name: {sheet_name}, "
+                                f"columns: [{start_column}:{end_column}])")
                     request = {
                         "id": new_sheet_id,
-                        "range": "Sheet1!A:B",
+                        "range": f"{sheet_name}!{start_column}:{end_column}",
                         "body": {"majorDimension": "ROWS",
                                  "values": util.df_to_list(data_df)}
                     }
@@ -516,13 +530,3 @@ class GoogleDriveAPI(object):
         all_mime_types.update(self.google_mime_types)
         reversed_map = {v: k for k, v in all_mime_types.items()}
         return reversed_map.get(mime_type)
-
-
-def main():
-    logger.info("Testing refactored code.")
-    google_drive = GoogleDriveAPI()
-    logger.info(google_drive.get_csv_file_list())
-
-
-if __name__ == "__main__":
-    main()

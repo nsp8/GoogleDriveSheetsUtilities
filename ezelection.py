@@ -343,15 +343,15 @@ def test_file(local_file_path):
     """
     try:
         if path.exists(local_file_path):
-            local_data = get_data_local(local_file_path)
-            local_frame_index = 1 if len(local_data) > 0 else 0
-            if local_frame_index == 0:
-                raise Exception("Could only find one frame in local file.")
-            vote_distribution_df = local_data[local_frame_index]
+            local_data = util.extract_data_blocks(local_file_path)
+            assert len(local_data) > 1
+            vote_distribution_df = local_data[1]
             clean_proxy_df = clean_proxy_elections_block(local_data[0])
             final_df = apply_final_aggregations(clean_proxy_df,
                                                 vote_distribution_df)
             return final_df
+    except AssertionError:
+        logger.error("Could only find one frame in local file.")
     except Exception as e:
         logger.error(f"Error in test_file: {e}")
     return pd.DataFrame()

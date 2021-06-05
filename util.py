@@ -149,24 +149,28 @@ def perform_split(contents):
     :return: list of cleaner file rows with appropriate parsing
     """
     from numpy import nan
-    _contents = deepcopy(contents)
-    row_metadata = get_row_metadata(_contents)
+    new_contents = deepcopy(contents)
+    row_metadata = get_row_metadata(new_contents)
     meta_df = pd.DataFrame(row_metadata).T
     meta_df_reduced = meta_df.applymap(lambda s: nan if not s else s).dropna(
         axis=1, how="all")
     valid_df = meta_df[meta_df["col_width"] > 1]
     value_counts = valid_df["col_width"].value_counts().reset_index()
     counts = value_counts["col_width"]
-    outlier = value_counts[counts == counts.min()]["index"].squeeze()
-    dirty_row = meta_df_reduced[meta_df_reduced["col_width"] == outlier]
-    dirty_row = dirty_row.dropna(axis=1, how="all")
-    column = list(set(dirty_row.columns) - {"row", "col_width"})[0]
-    _pattern = dirty_row[column].squeeze()[0]
-    dirty_row["row"] = dirty_row["row"].apply(
-        lambda s: re.subn(_pattern, REPLACEMENT, s)[0])
-    for i in dirty_row.index:
-        _contents[i] = dirty_row["row"].loc[i]
-    return _contents
+    outliers = value_counts[counts == counts.min()]["index"]
+    # dirty_rows = meta_df_reduced[meta_df_reduced["col_width"] == outlier]
+    dirty_rows = meta_df_reduced[meta_df_reduced["col_width"].isin(outliers)]
+    dirty_rows = dirty_rows.dropna(axis=1, how="all")
+    column = list(set(dirty_rows.columns) - {"row", "col_width"})[0]
+    patterns = dirty_rows[column].unique()[0]
+    pattern = ""
+    if isinstance(patterns, tuple):
+        pattern = patterns[0]
+    dirty_rows["row"] = dirty_rows["row"].apply(
+        lambda s: re.subn(pattern, REPLACEMENT, s)[0])
+    for i in dirty_rows.index:
+        new_contents[i] = dirty_rows["row"].loc[i]
+    return new_contents
 
 
 def extract_data_blocks(file_path):
@@ -209,8 +213,8 @@ def extract_data_blocks(file_path):
             start, end = frame["start"], frame["end"]
             rows_str = new_content[start:end + 1]
             rows_list = [re.subn(r"\n", "", r)[0].split(",") for r in rows_str]
-            dataframes.append(
-                pd.DataFrame(data=rows_list[1:], columns=rows_list[0]))
+            df = pd.DataFrame(data=rows_list[1:], columns=rows_list[0])
+            dataframes.append(df)
     except Exception as e:
         logger.error(f"Couldn't format CSV data because: {e}")
     return dataframes
