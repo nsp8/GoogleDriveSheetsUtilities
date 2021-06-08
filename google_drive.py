@@ -262,7 +262,7 @@ class GoogleDriveAPI(object):
             pre_exists, msg_ = self.is_file_in_folder(
                 parent_folder_id=folder_id,
                 file_name=title,
-                file_type="spreadsheet")
+                file_type="google sheets")
             if pre_exists:
                 logger.info(msg_)
                 file_pattern_ = r"(.*)-v(\d+)"

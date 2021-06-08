@@ -341,17 +341,19 @@ def test_file(local_file_path):
     :param local_file_path: str - file path.
     :return: DataFrame containing the processed data.
     """
+    n = 0
     try:
         if path.exists(local_file_path):
             local_data = util.extract_data_blocks(local_file_path)
-            assert len(local_data) > 1
+            n = len(local_data)
+            assert n > 1
             vote_distribution_df = local_data[1]
             clean_proxy_df = clean_proxy_elections_block(local_data[0])
             final_df = apply_final_aggregations(clean_proxy_df,
                                                 vote_distribution_df)
             return final_df
     except AssertionError:
-        logger.error("Could only find one frame in local file.")
+        logger.error(f"Could only find {n} frame(s) in local file.")
     except Exception as e:
         logger.error(f"Error in test_file: {e}")
     return pd.DataFrame()

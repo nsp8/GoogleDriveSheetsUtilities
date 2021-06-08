@@ -170,7 +170,7 @@ def perform_split(contents):
         lambda s: re.subn(pattern, REPLACEMENT, s)[0])
     for i in dirty_rows.index:
         new_contents[i] = dirty_rows["row"].loc[i]
-    return new_contents
+    return new_contents, pattern
 
 
 def extract_data_blocks(file_path):
@@ -201,20 +201,43 @@ def extract_data_blocks(file_path):
             _content_map.append(_map)
         return _content_map
 
+    def rows_to_df(row_list, frame_bound):
+        start, end = frame_bound["start"], frame_bound["end"]
+        rows_str = row_list[start:end + 1]
+        rows_list = [re.subn(r"\n", "", r)[0].split(",") for r in rows_str]
+        df = pd.DataFrame()
+        try:
+            df = pd.DataFrame(data=rows_list[1:], columns=rows_list[0])
+            dataframes.append(df)
+        except ValueError as ve:
+            logger.error(f"Trying to improve from error string [{ve}]")
+            err_pattern = r"(\d+)\s*column[s] passed\s*,\s*passed data had (\d+) column[s]"
+            err_match = re.search(err_pattern, str(ve))
+            if err_match:
+                logger.info(f"Found error pattern")
+                expected, found = err_match.groups()
+                fn = int(found)
+                rows = content_map[content_map["len"] == fn].index.to_list()
+                logger.info(f"Inconsistent-number:{fn};Indices:{rows}")
+                _contents = deepcopy(row_list)
+                for row in rows:
+                    old_value = row_list[row]
+                    _contents[row] = re.subn(replacer,
+                                             REPLACEMENT,
+                                             old_value)[0]
+                rows_to_df(_contents, frame_bound)
+
     dataframes = list()
     try:
         with open(file_path) as f:
             contents = f.readlines()
 
-        new_content = perform_split(contents)
+        new_content, replacer = perform_split(contents)
         content_map = pd.DataFrame(create_content_map(new_content))
         frame_indices = get_frame_indices(content_map)
         for frame in frame_indices:
-            start, end = frame["start"], frame["end"]
-            rows_str = new_content[start:end + 1]
-            rows_list = [re.subn(r"\n", "", r)[0].split(",") for r in rows_str]
-            df = pd.DataFrame(data=rows_list[1:], columns=rows_list[0])
-            dataframes.append(df)
+            logger.info(f"Frame indices: {frame}")
+            rows_to_df(new_content, frame)
     except Exception as e:
         logger.error(f"Couldn't format CSV data because: {e}")
     return dataframes
