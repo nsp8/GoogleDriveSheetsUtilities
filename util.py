@@ -1,5 +1,7 @@
-# from os import path
+from os import path, mkdir, sep
+from shutil import move
 from copy import deepcopy
+from datetime import datetime as dt
 import logging
 import re
 import pandas as pd
@@ -490,3 +492,29 @@ def convert_to_numeric(value):
     except Exception as e:
         logger.error(f"Encountered an exception in convert_to_numeric: {e}")
     return value
+
+
+def get_datetime():
+    def prefixed(s):
+        return f"0{s}" if s in range(0, 10) else str(s)
+
+    _now = dt.now()
+    return f"{_now.year}-{prefixed(_now.month)}-{prefixed(_now.day)} " \
+           f"{prefixed(_now.hour)}-{prefixed(_now.minute)}"
+
+
+def move_file(source, destination=None):
+    try:
+        _directory = get_datetime()
+        source_file = source.split(sep)[-1]
+        d = _directory if destination is None else destination
+        if not path.exists(d):
+            mkdir(d)
+        file_path = path.join(d, source_file)
+        move(source, file_path)
+        if path.exists(file_path):
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Encountered error while moving file from {source} to "
+                     f"{destination}: {e}")

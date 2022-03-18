@@ -5,6 +5,7 @@ import logging
 from apiclient import errors
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 import util
@@ -19,14 +20,45 @@ formatter = logging.Formatter("%(asctime)s: "
                               "%(message)s")
 file_handler.setFormatter(formatter)
 
+APP_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+def authorize_user():
+    # Instantiate Google Drive and Spreadsheets service objects.
+    # [Reads the tokens and credentials files for authentication.]
+    creds = None
+    token_file_exists = path.exists("token.json")
+    if token_file_exists:
+        creds = Credentials.from_authorized_user_file("token.json")
+
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        logger.info("Invalid credentials. Retrying...")
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                logger.info("Credentials expired! Refreshing...")
+                creds.refresh(Request())
+            except RefreshError as e:
+                logger.error(f"Couldn't refresh credentials because:\n{e}.")
+                logger.error("Retrying...")
+                if token_file_exists:
+                    r = util.move_file("token.json")
+                    logger.info(f"token file moved to temp folder: {r}")
+                    authorize_user()
+        else:
+            _file = 'credentials.json'
+            flow = InstalledAppFlow.from_client_secrets_file(_file, APP_SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Save the credentials for the next run
+        with open("token.json", "w") as token:
+            token.write(creds.to_json())
+    return creds
+
 
 class GoogleDriveAPI(object):
     def __init__(self):
         self.drive_service = None
         self.sheets_service = None
-        self.scopes = [
-            'https://www.googleapis.com/auth/drive',
-        ]
         self.google_mime_types = {
             "spreadsheet": "application/vnd.google-apps.spreadsheet",
             "folder": "application/vnd.google-apps.folder"
@@ -38,25 +70,7 @@ class GoogleDriveAPI(object):
         }
         self.file_fields = ["kind", "id", "name", "mimeType", "trashed",
                             "parents"]
-
-        # Instantiate Google Drive and Spreadsheets service objects.
-        # [Reads the tokens and credentials files for authentication.]
-        creds = None
-        if path.exists("token.json"):
-            creds = Credentials.from_authorized_user_file("token.json")
-
-        # If there are no (valid) credentials available, let the user log in.
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                _file = 'credentials.json'
-                flow = InstalledAppFlow.from_client_secrets_file(_file,
-                                                                 self.scopes)
-                creds = flow.run_local_server(port=0)
-            # Save the credentials for the next run
-            with open("token.json", "w") as token:
-                token.write(creds.to_json())
+        creds = authorize_user()
         self.drive_service = build('drive', 'v3', credentials=creds,
                                    cache_discovery=False)
         self.sheets_service = build('sheets', 'v4', credentials=creds,
