@@ -1,9 +1,11 @@
+from io import BytesIO
 from os import path
 from re import search
 from string import ascii_uppercase as alphabets
 import logging
 from apiclient import errors
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
@@ -33,10 +35,10 @@ def authorize_user():
 
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
-        logger.info("Invalid credentials. Retrying...")
+        logger.info("Invalid credentials or token. Retrying...")
         if creds and creds.expired and creds.refresh_token:
             try:
-                logger.info("Credentials expired! Refreshing...")
+                logger.info("Token expired! Refreshing...")
                 creds.refresh(Request())
             except RefreshError as e:
                 logger.error(f"Couldn't refresh credentials because:\n{e}.")
@@ -49,6 +51,11 @@ def authorize_user():
             _file = 'credentials.json'
             flow = InstalledAppFlow.from_client_secrets_file(_file, APP_SCOPES)
             creds = flow.run_local_server(port=0)
+            if creds.valid:
+                logger.info("User authorization successful!")
+            else:
+                logger.error(f"User authorization failed!")
+                return None
         # Save the credentials for the next run
         with open("token.json", "w") as token:
             token.write(creds.to_json())
@@ -71,10 +78,11 @@ class GoogleDriveAPI(object):
         self.file_fields = ["kind", "id", "name", "mimeType", "trashed",
                             "parents"]
         creds = authorize_user()
-        self.drive_service = build('drive', 'v3', credentials=creds,
-                                   cache_discovery=False)
-        self.sheets_service = build('sheets', 'v4', credentials=creds,
-                                    cache_discovery=False)
+        if creds:
+            self.drive_service = build('drive', 'v3', credentials=creds,
+                                       cache_discovery=False)
+            self.sheets_service = build('sheets', 'v4', credentials=creds,
+                                        cache_discovery=False)
 
     def get_file_metadata_by_query(self, query):
         """
@@ -82,6 +90,7 @@ class GoogleDriveAPI(object):
         :param query: str - query string to query the Drive API.
         :return: list of responses.
         """
+        assert self.drive_service is not None
         result = list()
         try:
             _fields = f"files({', '.join(self.file_fields)})"
@@ -101,6 +110,7 @@ class GoogleDriveAPI(object):
         :param file_id: str - ID of the file.
         :return: list of responses.
         """
+        assert self.drive_service is not None
         response = dict()
         try:
             _fields = ', '.join(self.file_fields)
@@ -249,6 +259,7 @@ class GoogleDriveAPI(object):
         :param target_id: str - ID of the folder in which the file will move.
         :return: Response if there was no HTTPError raised, otherwise None.
         """
+        assert self.drive_service is not None
         try:
             files_object = self.drive_service.files()
             update_response = files_object.update(
@@ -270,6 +281,7 @@ class GoogleDriveAPI(object):
         :param folder_id: str - ID of the folder to save the file in.
         :return: Response if there was no Exceptions raised, otherwise None.
         """
+        assert self.sheets_service is not None
         if not data_df.empty:
             from itertools import product
             from string import ascii_uppercase
@@ -341,6 +353,7 @@ class GoogleDriveAPI(object):
         :return: str - ID of the new created folder if successful, otherwise
         None.
         """
+        assert self.drive_service is not None
         new_folder_id, create_response = None, None
         logger.info(
             f"Creating Folder '{folder_name}' inside '{target_folder}'")
@@ -391,6 +404,7 @@ class GoogleDriveAPI(object):
         corresponding value being the DataFrame, if everything works out,
         otherwise an empty dict.
         """
+        assert self.sheets_service is not None
         input_sheet_cols = ":".join(
             alphabets[start] + alphabets[start + num_cols - 1])
         spreadsheet_dataframes = dict()
@@ -544,3 +558,39 @@ class GoogleDriveAPI(object):
         all_mime_types.update(self.google_mime_types)
         reversed_map = {v: k for k, v in all_mime_types.items()}
         return reversed_map.get(mime_type)
+
+    def download_file(self, file_id, is_google_workspace=False):
+        """
+        Downloads a file stored on Google Drive into a MediaIoBaseDownload
+        object (access the file data as downloader._fd)
+        :param file_id: str - ID of the file
+        :param is_google_workspace: boolean - whether the  file is a Google
+        Workspace Document
+        :return:
+        """
+        _request = self.drive_service.files().get_media(fileId=file_id)
+        buffered_io = BytesIO()
+        downloader = MediaIoBaseDownload(buffered_io, _request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+            print(f"Download progress: {int(status.progress() * 100)}")
+        return downloader
+
+    def download_workspace_doc(self, file_id, mime_type):
+        """
+        Downloads a Google Workspace Document on Google Drive into a
+        MediaIoBaseDownload object (access the file data as downloader._fd)
+        :param file_id: str - ID of the file
+        :param mime_type: str - MIME type of the Google Workspace Document
+        :return:
+        """
+        _request = self.drive_service.files().export_media(fileId=file_id,
+                                                           mimeType=mime_type)
+        buffered_io = BytesIO()
+        downloader = MediaIoBaseDownload(buffered_io, _request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+            print(f"Download progress: {int(status.progress() * 100)}")
+        return downloader

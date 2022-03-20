@@ -357,7 +357,8 @@ def get_file_data(file_object, file_type="csv"):
                 _content = _response.content
                 return read_excel(_content, sheet_name=None)
         else:
-            logger.info(f"Response was not found for: {_url}")
+            logger.error(f"Response was not found for: {_url} "
+                         f"[status: {_response.status_code}]")
             return None
     except AssertionError as assertion:
         logger.error(f"<get_file_data>: {assertion}\n"
@@ -505,16 +506,18 @@ def get_datetime():
 
 def move_file(source, destination=None):
     try:
+        base_dir_name = "tokens"
         _directory = get_datetime()
         source_file = source.split(sep)[-1]
-        d = _directory if destination is None else destination
+        _path = path.join(base_dir_name, _directory)
+        d = _path if destination is None else destination
         if not path.exists(d):
             mkdir(d)
-        file_path = path.join(d, source_file)
+        file_path = path.join(_path, source_file)
         move(source, file_path)
         if path.exists(file_path):
             return True
         return False
     except Exception as e:
-        logger.error(f"Encountered error while moving file from {source} to "
-                     f"{destination}: {e}")
+        logger.error(
+            f"Encountered error while moving file from {source} to {d}: {e}")
