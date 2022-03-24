@@ -25,7 +25,7 @@ file_handler.setFormatter(formatter)
 APP_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
-def authorize_user():
+def authorize_user() -> Credentials:
     # Instantiate Google Drive and Spreadsheets service objects.
     # [Reads the tokens and credentials files for authentication.]
     creds = None
@@ -55,7 +55,7 @@ def authorize_user():
                 logger.info("User authorization successful!")
             else:
                 logger.error(f"User authorization failed!")
-                return None
+                raise RefreshError("User authorization failed!")
         # Save the credentials for the next run
         with open("token.json", "w") as token:
             token.write(creds.to_json())
@@ -77,14 +77,16 @@ class GoogleDriveAPI(object):
         }
         self.file_fields = ["kind", "id", "name", "mimeType", "trashed",
                             "parents"]
-        creds = authorize_user()
-        if creds:
+        try:
+            creds = authorize_user()
             self.drive_service = build('drive', 'v3', credentials=creds,
                                        cache_discovery=False)
             self.sheets_service = build('sheets', 'v4', credentials=creds,
                                         cache_discovery=False)
+        except RefreshError as e:
+            print(f"Could not create the API services because: {e}")
 
-    def get_file_metadata_by_query(self, query):
+    def get_file_metadata_by_query(self, query: str) -> list:
         """
         Returns a list of responses based on the query.
         :param query: str - query string to query the Drive API.
@@ -104,7 +106,7 @@ class GoogleDriveAPI(object):
         finally:
             return result
 
-    def get_file_metadata_by_id(self, file_id):
+    def get_file_metadata_by_id(self, file_id: str):
         """
         Returns a list of responses based on the query.
         :param file_id: str - ID of the file.
@@ -123,7 +125,9 @@ class GoogleDriveAPI(object):
         finally:
             return response
 
-    def get_folder_contents(self, folder_id, only_sub_folders=False):
+    def get_folder_contents(self,
+                            folder_id: str,
+                            only_sub_folders: bool = False):
         """
         Retrieves a list of dicts of files/folders associated with the
         folder_id.
@@ -146,7 +150,7 @@ class GoogleDriveAPI(object):
             logger.error(f"ERROR in get_folder_contents: {error}")
             return None
 
-    def get_folder_id(self, results, check_parents=True):
+    def get_folder_id(self, results: list, check_parents: bool = True):
         """
         Retrieves the folder ID on the basis of an execute response
         {result of execute(): eg = drive_service.files().list(...).execute()}.
@@ -179,7 +183,7 @@ class GoogleDriveAPI(object):
                     return file_ids
                 return None
 
-    def get_folder(self, folder_name, is_name_subset=False):
+    def get_folder(self, folder_name: str, is_name_subset: bool = False):
         """
         Fetches a dict of a given folder's ID and the children contained inside
         (if present), even the ones in "Trash".
@@ -252,7 +256,7 @@ class GoogleDriveAPI(object):
             msg = f"ERROR in is_file_in_folder: {error}"
             return False, msg
 
-    def move_file(self, file_id, target_id):
+    def move_file(self, file_id: str, target_id: str):
         """
         Moves/associates a file to another Drive folder (target_id).
         :param file_id: str - ID of the file to move.
@@ -271,7 +275,7 @@ class GoogleDriveAPI(object):
                          f"because: {e}")
             return None
 
-    def create_spreadsheet(self, title, data_df, folder_id=None):
+    def create_spreadsheet(self, title: str, data_df, folder_id: str = None):
         """
         Creates a new Google Sheet. If another sheet of the same name exists,
         it will try to create another Sheet with a different suffix (e.g. -vN,
@@ -279,7 +283,7 @@ class GoogleDriveAPI(object):
         :param title: str - name of the file.
         :param data_df: DataFrame to be saved.
         :param folder_id: str - ID of the folder to save the file in.
-        :return: Response if there was no Exceptions raised, otherwise None.
+        :return: Response if there was no Exception raised, otherwise None.
         """
         assert self.sheets_service is not None
         if not data_df.empty:
@@ -345,7 +349,7 @@ class GoogleDriveAPI(object):
                              f" {error}")
                 return None
 
-    def create_folder(self, folder_name, target_folder):
+    def create_folder(self, folder_name: str, target_folder: str):
         """
         Creates a new Google Drive folder inside another.
         :param folder_name: str - name of the new folder.
@@ -459,17 +463,20 @@ class GoogleDriveAPI(object):
                 results = self.get_file_metadata_by_query(folder_query)
                 folder_id = self.get_folder_id(results)
                 if folder_id:
-                    inputs_file_id = self.get_folder_contents(folder_id)
-                    logger.info(inputs_file_id)
-                    _mimes = self.google_mime_types["spreadsheet"]
-                    file = util.get_spreadsheets_from_files(inputs_file_id,
-                                                            _mimes,
-                                                            file_name)
-                    if file:
-                        sheet_id = file[0].get("id")
-                        file_data = self.sheet_to_df_dict(sheet_id,
-                                                          num_cols,
-                                                          start_col)
+                    if isinstance(folder_id, str):
+                        inputs_file_id = self.get_folder_contents(folder_id)
+                        logger.info(inputs_file_id)
+                        _mimes = self.google_mime_types["spreadsheet"]
+                        file = util.get_spreadsheets_from_files(inputs_file_id,
+                                                                _mimes,
+                                                                file_name)
+                        if file:
+                            sheet_id = file[0].get("id")
+                            file_data = self.sheet_to_df_dict(sheet_id,
+                                                              num_cols,
+                                                              start_col)
+                    logger.info(f"Multiple folder IDs found:")
+                    logger.info(folder_id)
                 else:
                     logger.info("No Folder found!")
             except errors.HttpError as error:
@@ -546,7 +553,7 @@ class GoogleDriveAPI(object):
         finally:
             return parents
 
-    def get_file_type_from_mime(self, mime_type):
+    def get_file_type_from_mime(self, mime_type: str):
         """
         Get MIME type of the file from its metadata.
         :param mime_type: string value of the MIME type
@@ -559,14 +566,13 @@ class GoogleDriveAPI(object):
         reversed_map = {v: k for k, v in all_mime_types.items()}
         return reversed_map.get(mime_type)
 
-    def download_file(self, file_id, is_google_workspace=False):
+    def download_file(self, file_id: str):
         """
         Downloads a file stored on Google Drive into a MediaIoBaseDownload
-        object (access the file data as downloader._fd)
+        object (access the file data as
+        ``MediaIoBaseDownload._fd``)
         :param file_id: str - ID of the file
-        :param is_google_workspace: boolean - whether the  file is a Google
-        Workspace Document
-        :return:
+        :return: googleapiclient.http.MediaIoBaseDownload object
         """
         _request = self.drive_service.files().get_media(fileId=file_id)
         buffered_io = BytesIO()
@@ -577,13 +583,14 @@ class GoogleDriveAPI(object):
             print(f"Download progress: {int(status.progress() * 100)}")
         return downloader
 
-    def download_workspace_doc(self, file_id, mime_type):
+    def download_workspace_doc(self, file_id: str, mime_type: str):
         """
         Downloads a Google Workspace Document on Google Drive into a
-        MediaIoBaseDownload object (access the file data as downloader._fd)
+        MediaIoBaseDownload object (access the file data as
+        ``MediaIoBaseDownload._fd``)
         :param file_id: str - ID of the file
         :param mime_type: str - MIME type of the Google Workspace Document
-        :return:
+        :return: googleapiclient.http.MediaIoBaseDownload object
         """
         _request = self.drive_service.files().export_media(fileId=file_id,
                                                            mimeType=mime_type)
