@@ -20,8 +20,7 @@ def read_sheet_data(file_name, sheet_name=None, skip_rows=0):
         folder = drive_api.get_folder(folder_name)
         file_object = [f for f in folder["children"]
                        if not f["trashed"] and f["name"] == file_name][0]
-        file_contents = drive_api.download_file(file_object["id"],
-                                                drive_api.drive_service)
+        file_contents = drive_api.download_file(file_object["id"])
 
         if sheet_name:
             file_data_all = pd.read_excel(file_contents._fd,
