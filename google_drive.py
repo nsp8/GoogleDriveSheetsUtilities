@@ -438,13 +438,13 @@ class GoogleDriveAPI(object):
         finally:
             return spreadsheet_dataframes
 
-    def handle_inputs(self, user, file_name="inputs", num_cols=-1,
+    def handle_inputs(self, folder, file_name="inputs", num_cols=-1,
                       start_col=0):
         """
         Converts Google Sheets file with `file_name` from a folder `user`
         into a
         dict of sheet-values.
-        :param user: str - name of the folder containing the file.
+        :param folder: str - name of the folder containing the file.
         :param file_name: str - name of the Google Sheets file.
         :param num_cols: number of columns to consider (0 being the first).
             `num_cols = -1` will take all the columns.
@@ -454,10 +454,10 @@ class GoogleDriveAPI(object):
         otherwise an empty dict.
         """
         file_data = dict()
-        if user:
+        if folder:
             folder_condition = f"mimeType = '" \
                                f"{self.google_mime_types.get('folder')}'"
-            folder_query = f"name contains '{user}' and {folder_condition}"
+            folder_query = f"name contains '{folder}' and {folder_condition}"
             logger.info(folder_query)
             try:
                 results = self.get_file_metadata_by_query(folder_query)
